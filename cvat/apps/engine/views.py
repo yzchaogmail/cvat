@@ -15,7 +15,7 @@ from django.views.decorators.gzip import gzip_page
 from sendfile import sendfile
 
 from . import annotation, task, models
-from cvat.settings.base import JS_3RDPARTY
+from cvat.settings.base import JS_3RDPARTY, CSS_3RDPARTY
 from cvat.apps.authentication.decorators import login_required
 from requests.exceptions import RequestException
 import logging
@@ -38,6 +38,7 @@ def dispatch_request(request):
     """An entry point to dispatch legacy requests"""
     if request.method == 'GET' and 'id' in request.GET:
         return render(request, 'engine/annotation.html', {
+            'css_3rdparty': CSS_3RDPARTY.get('engine', []),
             'js_3rdparty': JS_3RDPARTY.get('engine', []),
             'status_list': [str(i) for i in StatusChoice]
         })
@@ -104,8 +105,10 @@ def create_task(request):
     return JsonResponse({'tid': db_task.id})
 
 @login_required
-@permission_required(perm=['engine.task.access'],
-    fn=objectgetter(models.Task, 'tid'), raise_exception=True)
+#@permission_required(perm=['engine.task.access'],
+#    fn=objectgetter(models.Task, 'tid'), raise_exception=True)
+# We have commented lines above because the objectgetter() will raise 404 error in
+# cases when a task creating ends with an error. So an user don't get an actual reason of an error.
 def check_task(request, tid):
     """Check the status of a task"""
     try:
@@ -258,6 +261,7 @@ def save_annotation_for_job(request, jid):
         if 'logs' in data:
             for event in json.loads(data['logs']):
                 clogger.job[jid].info(json.dumps(event))
+        slogger.job[jid].info("annotation have been saved for the {} job".format(jid))
     except RequestException as e:
         slogger.job[jid].error("cannot send annotation logs for job {}".format(jid), exc_info=True)
         return HttpResponseBadRequest(str(e))

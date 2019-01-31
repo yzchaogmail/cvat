@@ -20,6 +20,7 @@ from django.conf import settings
 from django.db import transaction
 
 from cvat.apps.profiler import silk_profile
+from cvat.apps.engine.plugins import plugin_decorator
 from . import models
 from .task import get_frame_path, get_image_meta_cache
 from .log import slogger
@@ -34,7 +35,7 @@ def dump(tid, data_format, scheme, host):
     Dump annotation for the task in specified data format.
     """
     queue = django_rq.get_queue('default')
-    queue.enqueue_call(func=_dump, args=(tid, data_format, scheme, host),
+    queue.enqueue_call(func=_dump, args=(tid, data_format, scheme, host, OrderedDict()),
         job_id="annotation.dump/{}".format(tid))
 
 def check(tid):
@@ -72,6 +73,7 @@ def get(jid):
     return annotation.to_client()
 
 @silk_profile(name="Save job")
+@plugin_decorator
 @transaction.atomic
 def save_job(jid, data):
     """
@@ -89,8 +91,13 @@ def save_job(jid, data):
     annotation.save_to_db(data['create'])
     annotation.update_in_db(data['update'])
 
-    db_job.segment.task.updated_date = timezone.now()
-    db_job.segment.task.save()
+    updated = sum([  len(data["update"][key]) for key in data["update"] ])
+    deleted = sum([  len(data["delete"][key]) for key in data["delete"] ])
+    created = sum([  len(data["create"][key]) for key in data["create"] ])
+
+    if updated or deleted or created:
+        db_job.segment.task.updated_date = timezone.now()
+        db_job.segment.task.save()
 
     db_job.max_shape_id = max(db_job.max_shape_id, max(client_ids['create']) if client_ids['create'] else -1)
     db_job.save()
@@ -472,6 +479,7 @@ class _Annotation:
                 group_id=box.group_id,
                 boxes=[box0, box1],
                 attributes=box.attributes,
+                client_id=box.client_id,
             )
             paths.append(path)
 
@@ -491,6 +499,7 @@ class _Annotation:
                 stop_frame=shape.frame + 1,
                 group_id=shape.group_id,
                 shapes=[shape0, shape1],
+                client_id=shape.client_id,
                 attributes=shape.attributes,
             )
             paths.append(path)
@@ -1495,12 +1504,19 @@ class _AnnotationForSegment(_Annotation):
         self.points = annotation.points
         self.points_paths = annotation.points_paths
 
-@transaction.atomic
-def _dump(tid, data_format, scheme, host):
-    db_task = models.Task.objects.select_for_update().get(id=tid)
-    annotation = _AnnotationForTask(db_task)
-    annotation.init_from_db()
-    annotation.dump(data_format, scheme, host)
+@plugin_decorator
+def _dump(tid, data_format, scheme, host, plugin_meta_data):
+    # For big tasks dump function may run for a long time and
+    # we dont need to acquire lock after _AnnotationForTask instance
+    # has been initialized from DB.
+    # But there is the bug with corrupted dump file in case 2 or more dump request received at the same time.
+    # https://github.com/opencv/cvat/issues/217
+    with transaction.atomic():
+        db_task = models.Task.objects.select_for_update().get(id=tid)
+        annotation = _AnnotationForTask(db_task)
+        annotation.init_from_db()
+
+    annotation.dump(data_format, scheme, host, plugin_meta_data)
 
 def _calc_box_area(box):
     return (box.xbr - box.xtl) * (box.ybr - box.ytl)
@@ -1879,7 +1895,7 @@ class _AnnotationForTask(_Annotation):
                 # We don't have old boxes on the frame. Let's add all new ones.
                 self.boxes.extend(int_boxes_by_frame[frame])
 
-    def dump(self, data_format, scheme, host):
+    def dump(self, data_format, scheme, host, plugin_meta_data):
         def _flip_box(box, im_w, im_h):
             box.xbr, box.xtl = im_w - box.xtl, im_w - box.xbr
             box.ybr, box.ytl = im_h - box.ytl, im_h - box.ybr
@@ -1942,6 +1958,8 @@ class _AnnotationForTask(_Annotation):
             ])),
             ("dumped", str(timezone.localtime(timezone.now())))
         ])
+
+        meta.update(plugin_meta_data)
 
         if db_task.mode == "interpolation":
             meta["task"]["original_size"] = OrderedDict([
@@ -2080,10 +2098,14 @@ class _AnnotationForTask(_Annotation):
                 im_w = im_meta_data['original_size'][0]['width']
                 im_h = im_meta_data['original_size'][0]['height']
 
+                counter = 0
                 for shape_type in ["boxes", "polygons", "polylines", "points"]:
                     path_list = paths[shape_type]
                     for path in path_list:
+                        path_id = path.client_id if path.client_id != -1 else counter
+                        counter += 1
                         dump_dict = OrderedDict([
+                            ("id", str(path_id)),
                             ("label", path.label.name),
                         ])
                         if path.group_id:

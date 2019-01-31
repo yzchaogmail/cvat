@@ -5,6 +5,28 @@
  */
 
 /* exported ShapeCollectionModel ShapeCollectionController ShapeCollectionView */
+
+/* global
+    buildShapeController:false
+    buildShapeModel:false
+    buildShapeView:false
+    copyToClipboard:false
+    createExportContainer:false
+    ExportType:false
+    FilterController:false
+    FilterModel:false
+    FilterView:false
+    getExportTargetContainer:false
+    Listener:false
+    Logger:false
+    Mousetrap:false
+    POINT_RADIUS:false
+    SELECT_POINT_STROKE_WIDTH:false
+    ShapeSplitter:false
+    STROKE_WIDTH:false
+    SVG:false
+*/
+
 "use strict";
 
 class ShapeCollectionModel extends Listener {
@@ -21,7 +43,6 @@ class ShapeCollectionModel extends Listener {
         this._groupIdx = 0;
         this._frame = null;
         this._activeShape = null;
-        this._activeAAMShape = null;
         this._lastPos = {
             x: 0,
             y: 0,
@@ -95,14 +116,10 @@ class ShapeCollectionModel extends Listener {
         this._z_order.min = 0;
 
         if (this._activeShape) {
-            this._activeShape.active = false;
-        }
-
-        if (this._activeAAMShape) {
-            this._activeAAMShape.activeAAM = {
-                shape: false,
-                attribute: null
-            };
+            if (this._activeShape.activeAttribute != null) {
+                this._activeShape.activeAttribute = null;
+            }
+            this.resetActive();
         }
 
         this._currentShapes = [];
@@ -162,6 +179,22 @@ class ShapeCollectionModel extends Listener {
         return shape;
     }
 
+    _importShape(shape, shapeType, udpateInitialState) {
+        let importedShape = this.add(shape, shapeType);
+        if (udpateInitialState) {
+            if (shape.id === -1) {
+                const toDelete = getExportTargetContainer(ExportType.delete, importedShape.type, this._shapesToDelete);
+                toDelete.push(shape.id);
+            }
+            else {
+                this._initialShapes[shape.id] = {
+                    type: importedShape.type,
+                    exportedString: importedShape.export(),
+                };
+            }
+        }
+    }
+
     colorsByGroup(groupId) {
         // If group id of shape is 0 (default value), then shape not contained in a group
         if (!groupId) {
@@ -202,50 +235,35 @@ class ShapeCollectionModel extends Listener {
 
     import(data, udpateInitialState=false) {
         for (let box of data.boxes) {
-            this.add(box, 'annotation_box');
+            this._importShape(box, 'annotation_box', udpateInitialState);
         }
 
         for (let boxPath of data.box_paths) {
-            this.add(boxPath, 'interpolation_box');
+            this._importShape(boxPath, 'interpolation_box', udpateInitialState);
         }
 
         for (let points of data.points) {
-            this.add(points, 'annotation_points');
+            this._importShape(points, 'annotation_points', udpateInitialState);
         }
 
         for (let pointsPath of data.points_paths) {
-            this.add(pointsPath, 'interpolation_points');
+            this._importShape(pointsPath, 'interpolation_points', udpateInitialState);
         }
 
         for (let polygon of data.polygons) {
-            this.add(polygon, 'annotation_polygon');
+            this._importShape(polygon, 'annotation_polygon', udpateInitialState);
         }
 
         for (let polygonPath of data.polygon_paths) {
-            this.add(polygonPath, 'interpolation_polygon');
+            this._importShape(polygonPath, 'interpolation_polygon', udpateInitialState);
         }
 
         for (let polyline of data.polylines) {
-            this.add(polyline, 'annotation_polyline');
+            this._importShape(polyline, 'annotation_polyline', udpateInitialState);
         }
 
         for (let polylinePath of data.polyline_paths) {
-            this.add(polylinePath, 'interpolation_polyline');
-        }
-
-        if (udpateInitialState) {
-            for (const shape of this._shapes) {
-                if (shape.id === -1) {
-                    const toDelete = getExportTargetContainer(ExportType.delete, shape.type, this._shapesToDelete);
-                    toDelete.push(shape.id);
-                }
-                else {
-                    this._initialShapes[shape.id] = {
-                        type: shape.type,
-                        exportedString: shape.export(),
-                    };
-                }
-            }
+            this._importShape(polylinePath, 'interpolation_polyline', udpateInitialState);
         }
 
         this.notify();
@@ -396,14 +414,7 @@ class ShapeCollectionModel extends Listener {
     }
 
     add(data, type) {
-        let id = null;
-
-        if (!('id' in data) || data.id === -1) {
-            id = this._idGen.next();
-        }
-        else {
-            id = data.id;
-        }
+        let id = 'id' in data && data.id !== -1 ? data.id : this._idGen.next();
 
         let model = buildShapeModel(data, type, id, this.nextColor());
         if (type.startsWith('interpolation')) {
@@ -423,6 +434,7 @@ class ShapeCollectionModel extends Listener {
             this._groups[groupIdx] = this._groups[groupIdx] || [];
             this._groups[groupIdx].push(model);
         }
+        return model;
     }
 
     selectShape(pos, noActivation) {
@@ -498,16 +510,14 @@ class ShapeCollectionModel extends Listener {
 
             // If frame was not changed and collection already interpolated (for example after pause() call)
             if (frame === this._frame && this._currentShapes.length) return;
+
             if (this._activeShape) {
-                this._activeShape.active = false;
-                this._activeShape = null;
+                if (this._activeShape.activeAttribute != null) {
+                    this._activeShape.activeAttribute = null;
+                }
+                this.resetActive();
             }
-            if (this._activeAAMShape) {
-                this._activeAAMShape.activeAAM = {
-                    shape: false,
-                    attribute: null,
-                };
-            }
+
             this._frame = frame;
             this._interpolate();
             if (!window.cvat.mode) {
@@ -522,12 +532,15 @@ class ShapeCollectionModel extends Listener {
 
     onShapeUpdate(model) {
         switch (model.updateReason) {
-        case 'activeAAM':
-            if (model.activeAAM.shape) {
-                this._activeAAMShape = model;
+        case 'activeAttribute':
+            if (model.activeAttribute != null) {
+                if (this._activeShape && this._activeShape != model) {
+                    this.resetActive();
+                }
+                this._activeShape = model;
             }
-            else if (this._activeAAMShape === model) {
-                this._activeAAMShape = null;
+            else if (this._activeShape) {
+                this.resetActive();
             }
             break;
         case 'activation': {
@@ -1583,4 +1596,5 @@ class ShapeCollectionView {
             }
         }
     }
+
 }

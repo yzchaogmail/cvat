@@ -19,6 +19,7 @@ _MEDIA_MIMETYPES_FILE = os.path.join(_SCRIPT_DIR, "media.mimetypes")
 mimetypes.init(files=[_MEDIA_MIMETYPES_FILE])
 
 from cvat.apps.engine.models import StatusChoice
+from cvat.apps.engine.plugins import plugin_decorator
 
 import django_rq
 from django.conf import settings
@@ -26,6 +27,7 @@ from django.db import transaction
 from ffmpy import FFmpeg
 from pyunpack import Archive
 from distutils.dir_util import copy_tree
+from collections import OrderedDict
 
 from . import models
 from .log import slogger
@@ -154,7 +156,7 @@ def get(tid):
     """Get the task as dictionary of attributes"""
     db_task = models.Task.objects.get(pk=tid)
     if db_task:
-        db_labels = db_task.label_set.prefetch_related('attributespec_set').all()
+        db_labels = db_task.label_set.prefetch_related('attributespec_set').order_by('-pk').all()
         im_meta_data = get_image_meta_cache(db_task)
         attributes = {}
         for db_label in db_labels:
@@ -174,7 +176,7 @@ def get(tid):
         response = {
             "status": db_task.status,
             "spec": {
-                "labels": { db_label.id:db_label.name for db_label in db_labels },
+                "labels": OrderedDict((db_label.id, db_label.name) for db_label in db_labels),
                 "attributes": attributes
             },
             "size": db_task.size,
@@ -228,7 +230,7 @@ def get_job(jid):
         if db_task.mode == 'annotation':
             im_meta_data['original_size'] = im_meta_data['original_size'][db_segment.start_frame:db_segment.stop_frame + 1]
 
-        db_labels = db_task.label_set.prefetch_related('attributespec_set').all()
+        db_labels = db_task.label_set.prefetch_related('attributespec_set').order_by('-pk').all()
         attributes = {}
         for db_label in db_labels:
             attributes[db_label.id] = {}
@@ -237,7 +239,7 @@ def get_job(jid):
 
         response = {
             "status": db_job.status,
-            "labels": { db_label.id:db_label.name for db_label in db_labels },
+            "labels": OrderedDict((db_label.id, db_label.name) for db_label in db_labels),
             "stop": db_segment.stop_frame,
             "taskid": db_task.id,
             "slug": db_task.name,
@@ -375,7 +377,7 @@ def _get_frame_path(frame, base_dir):
     return path
 
 def _parse_labels(labels):
-    parsed_labels = {}
+    parsed_labels = OrderedDict()
 
     last_label = ""
     for token in shlex.split(labels):
@@ -400,10 +402,12 @@ def _parse_labels(labels):
                     raise ValueError("labels string is not corect. " +
                         "`{}` attribute has incorrect value.".format(attr['name']))
             elif attr['type'] == 'number': # <prefix>number=name:min,max,step
-                if not (len(values) == 3 and values[0].isdigit() and \
-                    values[1].isdigit() and values[2].isdigit() and \
-                    int(values[0]) < int(values[1])):
-                    raise ValueError("labels string is not corect. " +
+                try:
+                    if len(values) != 3 or float(values[2]) <= 0 or \
+                        float(values[0]) >= float(values[1]):
+                        raise ValueError
+                except ValueError:
+                    raise ValueError("labels string is not correct. " +
                         "`{}` attribute has incorrect format.".format(attr['name']))
 
             if attr['name'] in parsed_labels[last_label]:
@@ -636,12 +640,9 @@ def _save_task_to_db(db_task, task_params):
     db_task.save()
 
 
+@plugin_decorator
 @transaction.atomic
 def _create_thread(tid, params):
-    def raise_exception(images, dirs, videos, archives):
-        raise Exception('Only one archive, one video or many images can be dowloaded simultaneously. \
-            {} image(s), {} dir(s), {} video(s), {} archive(s) found'.format(images, dirs, videos, archives))
-
     slogger.glob.info("create task #{}".format(tid))
     job = rq.get_current_job()
 

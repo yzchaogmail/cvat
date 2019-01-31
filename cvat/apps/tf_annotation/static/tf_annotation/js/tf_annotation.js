@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* global
+    userConfirm:false
+    showMessage:false
+*/
+
 "use strict";
 
 function CheckTFAnnotationRequest(taskId, tfAnnotationButton) {
@@ -80,10 +85,10 @@ function onTFAnnotationClick() {
     window.cvat.dashboard.taskName = taskName;
 
     if (button.hasClass("tfAnnotationProcess")) {
-        confirm('The process will be canceled. Continue?', CancelTFAnnotationRequest.bind(button));
+        userConfirm('The process will be canceled. Continue?', CancelTFAnnotationRequest.bind(button));
     }
     else {
-        confirm('The current annotation will be lost. Are you sure?', RunTFAnnotationRequest.bind(button));
+        userConfirm('The current annotation will be lost. Are you sure?', RunTFAnnotationRequest.bind(button));
     }
 }
 
@@ -110,7 +115,7 @@ window.cvat.dashboard.uiCallbacks.push(function(newElements) {
                 let tfAnnotationButton = $('<button> Run TF Annotation </button>');
 
                 tfAnnotationButton.on('click', onTFAnnotationClick.bind(tfAnnotationButton));
-                tfAnnotationButton.addClass('dashboardTFAnnotationButton semiBold dashboardButtonUI');
+                tfAnnotationButton.addClass('dashboardTFAnnotationButton regular dashboardButtonUI');
                 tfAnnotationButton.appendTo(buttonsUI);
 
                 if ((tid in data) && (data[tid].active)) {

@@ -5,6 +5,15 @@
  */
 
 /* exported PlayerModel PlayerController PlayerView */
+
+/* global
+    blurAllElements:false
+    copyToClipboard:false
+    Listener:false
+    Logger:false
+    Mousetrap:false
+*/
+
 "use strict";
 
 class FrameProvider extends Listener {
@@ -493,6 +502,7 @@ class PlayerController {
     }
 
     fit() {
+        Logger.addEvent(Logger.EventType.fitImage)
         this._model.fit();
     }
 
@@ -798,9 +808,14 @@ class PlayerView {
         this._playerUI.on('contextmenu.playerContextMenu', (e) => {
             if (!window.cvat.mode) {
                 $('.custom-menu').hide(100);
-                this._contextMenuUI.finish().show(100).offset({
-                    top: e.pageY - 10,
-                    left: e.pageX - 10,
+                this._contextMenuUI.finish().show(100);
+                let x = Math.min(e.pageX, this._playerUI[0].offsetWidth -
+                    this._contextMenuUI[0].scrollWidth);
+                let y = Math.min(e.pageY, this._playerUI[0].offsetHeight -
+                    this._contextMenuUI[0].scrollHeight);
+                this._contextMenuUI.offset({
+                    left: x,
+                    top: y,
                 });
                 e.preventDefault();
             }

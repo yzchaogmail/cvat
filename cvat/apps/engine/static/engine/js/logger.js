@@ -5,6 +5,11 @@
  */
 
 /* exported Logger */
+
+/* global
+    Cookies:false
+*/
+
 "use strict";
 
 var UserActivityHandler = function()
@@ -16,10 +21,12 @@ var UserActivityHandler = function()
 
     this.updateTimer = function()
     {
-        let now = Date.now();
-        let diff = now - this._prevEventTime;
-        this._prevEventTime = now;
-        this._workingTime += diff < this._TIME_TRESHHOLD ? diff : 0;
+        if (document.hasFocus()) {
+            let now = Date.now();
+            let diff = now - this._prevEventTime;
+            this._prevEventTime = now;
+            this._workingTime += diff < this._TIME_TRESHHOLD ? diff : 0;
+        }
     };
 
     this.resetTimer = function()
@@ -36,7 +43,10 @@ var UserActivityHandler = function()
 
 class LogCollection extends Array {
     constructor(logger, items) {
-        super(...items);
+        super(items.length);
+        for (let i = 0; i < items.length; i++) {
+            super[i] = items[i];
+        }
         this._loggerHandler = logger;
     }
 
@@ -52,6 +62,7 @@ class LogCollection extends Array {
 var LoggerHandler = function(applicationName, jobId)
 {
     this._application = applicationName;
+    this._tabId = Date.now().toString().substr(-6);
     this._jobId = jobId;
     this._username = null;
     this._userActivityHandler = null;
@@ -129,6 +140,8 @@ var LoggerHandler = function(applicationName, jobId)
             application: this._application,
             task: this._jobId,
             userid: this._username,
+            tabid: this._tabId,
+            focus: document.hasFocus()
         });
     };
 
@@ -346,6 +359,10 @@ var Logger = {
         sendException: 22,
         // dumped as "Change frame". There are no additional required fields.
         changeFrame: 23,
+        // dumped as "Debug info". There are no additional required fields.
+        debugInfo: 24,
+        // dumped as "Fit image". There are no additional required fields.
+        fitImage: 25,
     },
 
     /**
@@ -507,6 +524,8 @@ var Logger = {
         case this.EventType.sendUserActivity: return 'Send user activity';
         case this.EventType.sendException: return 'Send exception';
         case this.EventType.changeFrame: return 'Change frame';
+        case this.EventType.debugInfo: return 'Debug info';
+        case this.EventType.fitImage: return 'Fit image';
         default: return 'Unknown';
         }
     },
